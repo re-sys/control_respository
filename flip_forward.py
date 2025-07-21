@@ -51,8 +51,8 @@ def generate_polar_jump_trajectory() -> List[List[Tuple[float, float]]]:
     
     # 角度定义（弧度）
     angle_phase0 = math.radians(-90)   # 初始角度
-    angle_phase1 = math.radians(-60)   # 第一阶段前腿旋转目标
-    angle_phase2_front = math.radians(0)  # 第二阶段前腿旋转目标
+    angle_phase1 = math.radians(-70)   # 第一阶段前腿旋转目标
+    angle_phase2_front = math.radians(10)  # 第二阶段前腿旋转目标
     angle_phase3_back = math.radians(-225) # 第三阶段后腿旋转目标
     angle_phase4_front = math.radians(45)  # 第四阶段前腿旋转目标
     
@@ -60,13 +60,13 @@ def generate_polar_jump_trajectory() -> List[List[Tuple[float, float]]]:
     leg_start_length = 0.17
     leg_length_prepare = 0.12
     leg_length_extend = 0.29
-    leg_end_length = 0.14
+    leg_end_length = 0.13
     
     # 时间参数（秒）
     t_phase0 = 0.6        # 下蹲阶段
-    t_phase1 = 0.5       # 后腿蹬伸+前腿旋转30°
-    t_phase2 = 0.6     # 后腿收腿+前腿旋转90°
-    t_phase3 = 0.4        # 前腿蹬伸+后腿旋转
+    t_phase1 = 0.35       # 后腿蹬伸+前腿旋转30°
+    t_phase2 = 0.35     # 后腿收腿+前腿旋转90°
+    t_phase3 = 0.2        # 前腿蹬伸+后腿旋转
     t_phase4 = 0.4        # 前腿旋转
     
     trajectory = []
