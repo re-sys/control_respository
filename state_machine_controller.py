@@ -182,7 +182,7 @@ class FlipState(State):
         # 角度定义
         angle_phase0 = math.radians(-90)
         angle_phase1 = math.radians(-60)
-        angle_phase2_front = math.radians(0)
+        angle_phase2_front = math.radians(20)
         angle_phase3_back = math.radians(-225)
         angle_phase4_front = math.radians(45)
         
@@ -432,25 +432,25 @@ class StateMachineController(Node):
             self._transition_to(StateType.IDLE)
             return
             
-        # 计算关节指令
-        joint_cmd = [0.0] * 9
-        for leg_id, (length, angle) in leg_targets.items():
-            ik_result = self.ik.inverse_kinematics(length, angle)
-            if ik_result is None:
-                self.get_logger().error(f"Leg {leg_id} IK失败")
-                return
-                
-            theta1, theta4 = ik_result
+        # 直接获取四个腿的数据
+        fl_length, fl_angle = leg_targets[Leg.FL]
+        fr_length, fr_angle = leg_targets[Leg.FR]
+        rl_length, rl_angle = leg_targets[Leg.RL]
+        rr_length, rr_angle = leg_targets[Leg.RR]
+        
+        # 分别计算IK
+        FL_theta1, FL_theta4 = self.ik.inverse_kinematics(fl_length, fl_angle)
+        FR_theta1, FR_theta4 = self.ik.inverse_kinematics(fr_length, fr_angle)
+        RL_theta1, RL_theta4 = self.ik.inverse_kinematics(rl_length, rl_angle)
+        RR_theta1, RR_theta4 = self.ik.inverse_kinematics(rr_length, rr_angle)
+        
             
-            # 关节方向调整
-            if leg_id == Leg.FL:
-                joint_cmd[0] = -theta1; joint_cmd[1] = theta4 + math.pi
-            elif leg_id == Leg.FR:
-                joint_cmd[2] = theta1; joint_cmd[3] = -theta4 - math.pi
-            elif leg_id == Leg.RL:
-                joint_cmd[5] = -theta4 - math.pi; joint_cmd[6] = theta1
-            elif leg_id == Leg.RR:
-                joint_cmd[7] = theta4 + math.pi; joint_cmd[8] = -theta1
+        # 直接赋值给cmd数组
+        joint_cmd = [0.0] * 9
+        joint_cmd[0] = -FL_theta1 ;joint_cmd[1] = FL_theta4 + math.pi  # FL_thigh_joint_o
+        joint_cmd[2] = FR_theta1 ;joint_cmd[3] = -FR_theta4 - math.pi  # FR_thigh_joint_o
+        joint_cmd[5] = -RL_theta4 - math.pi  ;joint_cmd[6] = RL_theta1 ;
+        joint_cmd[7] = RR_theta4 + math.pi  ;joint_cmd[8] = -RR_theta1  # RR_thigh_joint_o
         
         # 发布指令
         msg = JointState()

@@ -24,9 +24,9 @@ class GaitParams:
     def __init__(self):
         # 基础参数 (单位: 米/秒)
 
-        self.z_swing = 0.04       # 抬腿高度
-        self.leg_length_min = 0.16
-        self.leg_length_max = 0.27
+        self.z_swing = 0.03       # 抬腿高度
+        self.leg_length_min = 0.14
+        self.leg_length_max = 0.34
         self.z_landing_offset = 0.00
         
         self.stride = 0.1     # 最大步幅
@@ -44,8 +44,8 @@ class GaitParams:
 
 # ------------------- 逆运动学核心 -------------------
 class LegKinematics:
-    def __init__(self, l3=0.2, l4=0.1):
-        self.l3 = l3; self.l4 = l4  # 大腿/小腿长度
+    def __init__(self, l3=0.2, l4=0.16):
+        self.l3 = l3; self.l4 = l4  # 小腿/大腿长度
 
     def inverse_kinematics(self, l0: float, theta: float) -> tuple:
         """ 计算关节角度 (注意机械结构调整符号) """
@@ -159,19 +159,23 @@ class LocomotionController(Node):
                 for leg in [Leg.FL, Leg.FR, Leg.RL, Leg.RR]
             }
         # 生成关节指令
+        fl_length, fl_angle = leg_targets[Leg.FL]
+        fr_length, fr_angle = leg_targets[Leg.FR]
+        rl_length, rl_angle = leg_targets[Leg.RL]
+        rr_length, rr_angle = leg_targets[Leg.RR]
+        
+        # 分别计算IK
+        FL_theta1, FL_theta4 = self.ik.inverse_kinematics(fl_length, fl_angle)
+        FR_theta1, FR_theta4 = self.ik.inverse_kinematics(fr_length, fr_angle)
+        RL_theta1, RL_theta4 = self.ik.inverse_kinematics(rl_length, rl_angle)
+        RR_theta1, RR_theta4 = self.ik.inverse_kinematics(rr_length, rr_angle)
+
+        # 直接赋值给cmd数组
         joint_cmd = [0.0] * 9
-        for leg, (l, theta) in leg_targets.items():
-            theta1, theta4 = self.ik.inverse_kinematics(l, theta)
-            
-            # 机械结构调整 (根据实际安装方向可能需要修改)
-            if leg == Leg.FL:
-                joint_cmd[0] = -theta1; joint_cmd[1] = theta4 + math.pi
-            elif leg == Leg.FR:
-                joint_cmd[2] = theta1; joint_cmd[3] = -theta4 - math.pi
-            elif leg == Leg.RL:
-                joint_cmd[5] = -theta4 - math.pi; joint_cmd[6] = theta1
-            elif leg == Leg.RR:
-                joint_cmd[7] = theta4 + math.pi; joint_cmd[8] = -theta1
+        joint_cmd[0] = -FL_theta1 ;joint_cmd[1] = FL_theta4 + math.pi  # FL_thigh_joint_o
+        joint_cmd[2] = FR_theta1 ;joint_cmd[3] = -FR_theta4 - math.pi  # FR_thigh_joint_o
+        joint_cmd[5] = -RL_theta4 - math.pi  ;joint_cmd[6] = RL_theta1 ;
+        joint_cmd[7] = RR_theta4 + math.pi  ;joint_cmd[8] = -RR_theta1  # RR_thigh_joint_o
         
         # 发布指令
         msg = JointState()

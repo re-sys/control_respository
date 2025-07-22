@@ -23,7 +23,7 @@ class Leg:
 
 # ------------------- 逆运动学核心 -------------------
 class LegKinematics:
-    def __init__(self, l3: float = 0.2, l4: float = 0.1):
+    def __init__(self, l3: float = 0.2, l4: float = 0.16):
         self.l3 = l3  # 大腿长度
         self.l4 = l4  # 小腿长度
 
@@ -46,11 +46,11 @@ class LegKinematics:
 def generate_jump_trajectory() -> List[List[Tuple[float, float]]]:
     """ 生成带30度倾角的跳跃轨迹 """
     # 定义关键参数
-    z_start = -0.18       # 初始高度
+    z_start = -0.14       # 初始高度
     z_prepare = -0.12     # 准备姿势高度
-    z_jump = -0.29        # 起跳最高点
-    z_land = -0.18        # 落地缓冲高度
-    angle = math.radians(20)  # 30度倾角
+    z_jump = -0.35        # 起跳最高点
+    z_land = -0.14        # 落地缓冲高度
+    angle = math.radians(25)  # 30度倾角
     
     
     # 计算前倾和后仰的x偏移量
