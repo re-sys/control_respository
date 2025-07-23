@@ -10,6 +10,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Optional
 from enum import Enum
+from std_srvs.srv import Trigger
 
 # ------------------- 硬件常量定义 -------------------
 JOINT_NAMES = [
@@ -37,9 +38,10 @@ class LegKinematics:
     def __init__(self, l3=0.2, l4=0.16):
         self.l3 = l3; self.l4 = l4  # 大腿/小腿长度
 
-    def inverse_kinematics(self, l0: float, theta: float) -> Optional[Tuple[float, float]]:
+    def inverse_kinematics(self, l0: float, theta: float, io_flip: bool) -> Optional[Tuple[float, float]]:
         """ 计算关节角度 (极坐标版本) """
         theta_inside = math.acos((self.l4**2 + l0**2 - self.l3**2) / (2*self.l4*l0))
+        
         return theta + theta_inside, theta - theta_inside
 
 # ------------------- 状态基类 -------------------
@@ -78,14 +80,13 @@ class IdleState(State):
         
     def update(self) -> Dict[int, Tuple[float, float]]:
         angle = self.controller.pitch_angle 
-        result = {
+        return {
             Leg.FL: (self.controller.leg_length, angle),
             Leg.FR: (self.controller.leg_length, angle),
             Leg.RL: (self.controller.leg_length, angle),
             Leg.RR: (self.controller.leg_length, angle)
         }
-        # self.controller.get_logger().info(f"back_state: {self.controller.back_state}, flip_io_leg: {self.controller.flip_io_leg}")
-        return self.controller.compute_joint_cmd_from_leg_targets(result)
+        
     def can_transition_to(self, new_state: StateType) -> bool:
         return True  # 静止状态可以切换到任何状态
         
@@ -119,25 +120,23 @@ class TrotState(State):
         leg_targets = {}
         for leg_id in [Leg.FL, Leg.FR, Leg.RL, Leg.RR]:
             leg_targets[leg_id] = self._get_foot_target(leg_id)
-        
-        return self.controller.compute_joint_cmd_from_leg_targets(leg_targets)
+            
+        return leg_targets
         
     def _get_foot_target(self, leg_id: int) -> Tuple[float, float]:
         """ 生成单腿轨迹 """
         phase = (self.current_phase + self.phase_offsets[leg_id]) % 1.0
-        vx = self.controller.cmd_vel[0]
-        vy = self.controller.cmd_vel[1]
-        abs_vx = abs(vx)
+        abs_vx = abs(self.cmd_vel[0])
         
         stride = self.stride
-        if vy != 0:
-            angular_stride = vy * self.max_turn_offset
+        if self.controller.cmd_vel[1] != 0:
+            angular_stride = self.controller.cmd_vel[1] * self.max_turn_offset
             if leg_id in [Leg.FR, Leg.RR]:  # 右腿
                 stride = self.stride * abs_vx + angular_stride
             else:  # 左腿
                 stride = self.stride * abs_vx - angular_stride
                 
-        stride *= 1 if vx >= 0 else -1
+        stride *= 1 if self.controller.cmd_vel[0] >= 0 else -1
         half_stride = stride * 0.5
         angle = -math.pi/2
         z_base = self.controller.leg_length * math.sin(angle)
@@ -153,7 +152,7 @@ class TrotState(State):
             z = z_base
             x = x_base + half_stride - progress * stride
             
-        l = min(max(math.hypot(x, z),0.12),0.34)
+        l = math.hypot(x, z)
         theta = math.atan2(z, x)
         return l, theta
         
@@ -186,7 +185,6 @@ class FlipState(State):
         angle_phase2_back = math.radians(-180)
         angle_phase3_back = math.radians(-270)
         angle_phase4_front = math.radians(90)
-        angle_inc = self.controller.pitch_angle - angle_phase0
         
         # 长度定义
         leg_start_length = self.controller.leg_length
@@ -195,25 +193,21 @@ class FlipState(State):
         leg_end_length = 0.14
         
         # 时间参数
-        self.t_phase0 = 0.6        # 下蹲阶段
-        self.t_phase1 = 0.3       # 后腿蹬伸+前腿旋转30°
-        self.t_phase2 = 0.35     # 后腿收腿+前腿旋转90°
-        self.t_phase3 = 0.2        # 前腿蹬伸+后腿旋转
-        self.t_phase4 = 0.4        # 前腿旋转
-        self.t_phase5 = 0.4        # 恢复初始状态
-
-        self.first_io_flip_index = round(self.t_phase0*100+self.t_phase1*100)
-        self.second_io_flip_index = round(self.t_phase0*100+self.t_phase1*100+self.t_phase2*100+self.t_phase3*100)
+        t_phase0 = 0.6        # 下蹲阶段
+        t_phase1 = 0.3       # 后腿蹬伸+前腿旋转30°
+        t_phase2 = 0.35     # 后腿收腿+前腿旋转90°
+        t_phase3 = 0.2        # 前腿蹬伸+后腿旋转
+        t_phase4 = 0.4        # 前腿旋转
         
         # 阶段0：下蹲
-        for i in range(int(self.t_phase0 * 100)):
-            progress = i / (self.t_phase0 * 100)
+        for i in range(int(t_phase0 * 100)):
+            progress = i / (t_phase0 * 100)
             length = leg_start_length + (leg_length_prepare - leg_start_length) * progress
             trajectory.append([(length, angle_phase0)] * 2)
         
         # 阶段1：后腿蹬伸+前腿旋转
-        for i in range(int(self.t_phase1 * 100)):
-            progress = i / (self.t_phase1 * 100)
+        for i in range(int(t_phase1 * 100)):
+            progress = i / (t_phase1 * 100)
             front_angle = angle_phase0 + (angle_phase1 - angle_phase0) * progress
             trajectory.append([
                 (leg_length_prepare, front_angle),  # Front
@@ -221,8 +215,8 @@ class FlipState(State):
             ])
         
         # 阶段2：后腿收腿+前腿继续旋转
-        for i in range(int(self.t_phase2 * 100)):
-            progress = i / (self.t_phase2 * 100)
+        for i in range(int(t_phase2 * 100)):
+            progress = i / (t_phase2 * 100)
             front_angle = angle_phase1 + (angle_phase2_front - angle_phase1) * progress
             back_angle = angle_phase0 + (angle_phase2_back - angle_phase0) * progress
             back_length = leg_length_extend + (leg_end_length - leg_length_extend) * progress
@@ -232,8 +226,8 @@ class FlipState(State):
             ])
         
         # 阶段3：前腿蹬伸+后腿旋转
-        for i in range(int(self.t_phase3 * 100)):
-            progress = i / (self.t_phase3 * 100)
+        for i in range(int(t_phase3 * 100)):
+            progress = i / (t_phase3 * 100)
             back_angle = angle_phase2_back + (angle_phase3_back - angle_phase2_back) * progress
             trajectory.append([
                 (leg_length_extend, angle_phase2_front),  # Front
@@ -241,21 +235,13 @@ class FlipState(State):
             ])
         
         # 阶段4：前腿旋转
-        for i in range(int(self.t_phase4 * 100)):
-            progress = i / (self.t_phase4 * 100)
+        for i in range(int(t_phase4 * 100)):
+            progress = i / (t_phase4 * 100)
             front_angle = angle_phase2_front + (angle_phase4_front - angle_phase2_front) * progress
             trajectory.append([
                 (leg_end_length, front_angle),      # Front
                 (leg_end_length, angle_phase3_back)  # Rear
             ])
-        
-        # 阶段5：恢复初始状态
-        for i in range(int(self.t_phase5 * 100)):
-            progress = i / (self.t_phase5 * 100)
-            length = leg_end_length + (leg_start_length - leg_end_length) * progress
-            back_angle = angle_phase3_back + angle_inc * progress
-            front_angle = angle_phase4_front + angle_inc * progress
-            trajectory.append([(length, front_angle), (length, back_angle)])
         
         return trajectory
         
@@ -265,35 +251,33 @@ class FlipState(State):
             
         leg_polar_coords = self.trajectory[self.step_idx]
         self.step_idx += 1
-        if self.step_idx == self.first_io_flip_index:
-            if not self.controller.back_state:
+        if self.step_idx == (self.t_phase0+self.t_phase1) * 100:
+            if not self.back_state:
                 self.controller.flip_io_leg[1] = False if self.controller.flip_io_leg[1] else True
             else:
                 self.controller.flip_io_leg[0] = False if self.controller.flip_io_leg[0] else True
-        # self.controller.get_logger().info(f"step_idx: {self.step_idx},phase0+phase1+phase2+phase3: {(self.t_phase0+self.t_phase1+self.t_phase2+self.t_phase3) * 100}")
-        if self.step_idx == self.second_io_flip_index:
-            if not self.controller.back_state:
+
+        if self.step_idx == (self.t_phase0+self.t_phase1+self.t_phase2+self.t_phase3) * 100:
+            if not self.back_state:
                 self.controller.flip_io_leg[0] = False if self.controller.flip_io_leg[0] else True
             else:
                 self.controller.flip_io_leg[1] = False if self.controller.flip_io_leg[1] else True
-                self.controller.get_logger().info(f"back_state: {self.controller.back_state}, flip_io_leg: {self.controller.flip_io_leg}")
 
+        if self.step_idx == self.trajectory_length:
+            self.controller.back_state = not self.controller.back_state
 
-        result = {
+        return {
             Leg.FL: leg_polar_coords[0],
             Leg.FR: leg_polar_coords[0],
             Leg.RL: leg_polar_coords[1],
             Leg.RR: leg_polar_coords[1]
         }
-        return self.controller.compute_joint_cmd_from_leg_targets(result)
         
     def can_transition_to(self, new_state: StateType) -> bool:
-        if self.step_idx == self.trajectory_length:
-            self.controller.back_state = not self.controller.back_state
         return self.is_finished()  # 只有完成才能切换
         
     def is_finished(self) -> bool:
-        return self.step_idx >= self.trajectory_length
+        return self.step_idx >= len(self.trajectory)
 
 # ------------------- 前跳状态 -------------------
 class JumpState(State):
@@ -311,7 +295,7 @@ class JumpState(State):
         trajectory = []
         
         # 定义关键参数
-        leg_start_length = self.controller.leg_length
+        leg_start_length = 0.17
         leg_length_prepare = 0.14
         leg_length_extend = 0.36
         leg_end_length = 0.14
@@ -356,16 +340,19 @@ class JumpState(State):
         
         return trajectory
         
-    def update(self) -> Dict[int, Tuple[float, float]]:           
+    def update(self) -> Dict[int, Tuple[float, float]]:
+        if self.step_idx >= len(self.trajectory):
+            return {}
+            
         leg_xz = self.trajectory[self.step_idx]
         self.step_idx += 1
+        
         # 转换为极坐标
         result = {}
         for leg_id, (l, angle) in enumerate(leg_xz):
             result[leg_id] = (l, angle)
-        cmd = self.controller.compute_joint_cmd_from_leg_targets(result)
-
-        return cmd
+            
+        return result
         
     def can_transition_to(self, new_state: StateType) -> bool:
         return self.is_finished()  # 只有完成才能切换
@@ -373,6 +360,28 @@ class JumpState(State):
     def is_finished(self) -> bool:
         return self.step_idx >= len(self.trajectory)
 
+# ------------------- 错误状态 -------------------
+class ErrorState(State):
+    def __init__(self, controller: 'StateMachineController'):
+        super().__init__(controller)
+        self.locked_joint_cmd = None
+
+    def enter(self):
+        # 锁定当前关节角度
+        self.locked_joint_cmd = self.controller.last_joint_cmd.copy()
+        self.controller.get_logger().error("进入ERROR状态，锁定当前关节角度，僵尸站立！")
+
+    def update(self) -> Dict[int, Tuple[float, float]]:
+        # 返回锁定的关节角度（直接返回None，主循环特殊处理）
+        return None
+
+    def can_transition_to(self, new_state: StateType) -> bool:
+        return False  # 错误状态不可切换
+
+    def is_finished(self) -> bool:
+        return False  # 永远不完成
+
+# ------------------- 恢复状态 -------------------
 class RecoveryState(State):
     def __init__(self, controller: 'StateMachineController'):
         super().__init__(controller)
@@ -384,7 +393,8 @@ class RecoveryState(State):
     def enter(self):
         self.start_cmd = self.controller.last_joint_cmd.copy()
         # 生成Idle目标关节角度
-        self.target_cmd = self.controller.states[StateType.IDLE].update()
+        idle_targets = self.controller.states[StateType.IDLE].update()
+        self.target_cmd = self.controller.compute_joint_cmd_from_leg_targets(idle_targets)
         self.current_step = 0
         self.controller.get_logger().info("进入恢复状态，平滑过渡到静止站立")
 
@@ -402,36 +412,11 @@ class RecoveryState(State):
     def is_finished(self) -> bool:
         return self.current_step >= self.steps
 
-class ErrorState(State):
-    def __init__(self, controller: 'StateMachineController'):
-        super().__init__(controller)
-        
-    def enter(self):
-        self.controller.get_logger().info("进入错误状态")
-        
-    def update(self) -> Dict[int, Tuple[float, float]]:
-        return self.controller.last_joint_cmd
-        
-    def can_transition_to(self, new_state: 'StateType') -> bool:
-        if new_state == StateType.RECOVERY:
-            return True
-        return False
-        
-    def is_finished(self) -> bool:
-        return False
-
 # ------------------- 状态机控制器 -------------------
 class StateMachineController(Node):
     def __init__(self):
         super().__init__('state_machine_controller')
-        self.ik = LegKinematics()
-        self.leg_length = 0.17
-        self.pitch_angle = math.radians(-90)
-        self.back_state = False
-        self.flip_io_leg = [False, False] # front, rear
-        self.cmd_vel = [0.0, 0.0]
-        self.last_joint_cmd = np.zeros(9)
-
+        
         # 初始化状态
         self.states = {
             StateType.IDLE: IdleState(self),
@@ -439,18 +424,26 @@ class StateMachineController(Node):
             StateType.FLIP: FlipState(self),
             StateType.JUMP: JumpState(self),
             StateType.ERROR: ErrorState(self),
-            StateType.RECOVERY: RecoveryState(self)
+            StateType.RECOVERY: RecoveryState(self)  # 新增
         }
-        
+        self.current_state = self.states[StateType.IDLE]
+        self.current_state.enter()
         
         # ROS接口
         self.joint_pub = self.create_publisher(JointState, '/action', 10)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.state_sub = self.create_subscription(Int8, '/state', self.state_callback, 10)
         self.params_sub = self.create_subscription(Float32MultiArray, '/params', self.params_callback, 10)
-        self.current_state = self.states[StateType.FLIP]
-        self.current_state.enter()
         self.timer = self.create_timer(0.01, self.control_loop)
+        self.recover_srv = self.create_service(Trigger, '/recover', self.recover_callback)
+
+        self.ik = LegKinematics()
+        self.leg_length = 0.17
+        self.pitch_angle = math.radians(-90)
+        self.back_state = False
+        self.flip_io_leg = [False, False] # front, rear
+        self.cmd_vel = [0.0, 0.0]
+        self.last_joint_cmd = [0.0] * 9
 
         self.get_logger().info("状态机控制器已启动")
         
@@ -461,12 +454,9 @@ class StateMachineController(Node):
         
     def params_callback(self, msg: Float32MultiArray):
         """ 处理参数指令 """
-        self.leg_length = 0.14 + msg.data[0]*(0.36-0.14)
+        self.leg_length = msg.data[0]
         self.pitch_angle = math.radians(-60)+msg.data[1]*math.radians(-60)
-        self.states[StateType.TROT].smallest_period = msg.data[2]
-        self.states[StateType.TROT].stride = msg.data[3]
-        self.states[StateType.TROT].z_swing = msg.data[4]
-
+                
     def state_callback(self, msg: Int8):
         """ 处理状态切换 """
         # 检查是否需要切换到跳跃状态
@@ -474,8 +464,7 @@ class StateMachineController(Node):
             self._transition_to(StateType.FLIP)
         elif msg.data == 2:  # 前跳触发
             self._transition_to(StateType.JUMP)
-        elif msg.data == 3:  # 恢复触发
-            self._transition_to(StateType.RECOVERY)
+
             
     def _transition_to(self, new_state_type: StateType):
         """ 切换到新状态 """
@@ -483,7 +472,7 @@ class StateMachineController(Node):
             self.current_state = self.states[new_state_type]
             self.current_state.enter()
             self.get_logger().info(f"切换到状态: {new_state_type.value}")
-
+            
     def compute_joint_cmd_from_leg_targets(self, leg_targets):
         # 复制自control_loop的IK流程，返回9维关节角度数组
         if not self.back_state:
@@ -519,36 +508,99 @@ class StateMachineController(Node):
         joint_cmd[7] = RR_theta4 + math.pi; joint_cmd[8] = -RR_theta1
         return joint_cmd
 
+    def recover_callback(self, request, response):
+        if self.current_state == self.states[StateType.ERROR]:
+            self._transition_to(StateType.RECOVERY)
+            response.success = True
+            response.message = "已开始恢复"
+        else:
+            response.success = False
+            response.message = "当前不是ERROR状态，无法恢复"
+        return response
+
     def control_loop(self):
         """ 主控制循环 """
-        # 更新当前状态
-        if isinstance(self.current_state, ErrorState):
+        # 如果处于ERROR状态，持续发布锁定角度
+        if self.current_state == self.states[StateType.ERROR]:
+            if self.current_state.locked_joint_cmd is not None:
+                msg = JointState()
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.name = JOINT_NAMES
+                msg.position = self.current_state.locked_joint_cmd
+                self.joint_pub.publish(msg)
             return
-
+        # 如果处于RECOVERY状态，平滑过渡
+        if self.current_state == self.states[StateType.RECOVERY]:
+            cmd = self.current_state.update()
+            msg = JointState()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.name = JOINT_NAMES
+            msg.position = cmd
+            self.joint_pub.publish(msg)
+            self.last_joint_cmd = cmd.copy()
+            if self.current_state.is_finished():
+                self._transition_to(StateType.IDLE)
+            return
+        # 更新当前状态
         if self.cmd_vel[0] != 0 or self.cmd_vel[1] != 0:
             self._transition_to(StateType.TROT)
+        leg_targets = self.current_state.update()
 
-        cmd = self.current_state.update()
+        if self.current_state.is_finished():  # 状态完成
+            self._transition_to(StateType.IDLE)
+            return
+            
         # 直接获取四个腿的数据
+        if not self.back_state:
+            fl_length, fl_angle = leg_targets[Leg.FL]
+            fr_length, fr_angle = leg_targets[Leg.FR]
+            rl_length, rl_angle = leg_targets[Leg.RL]
+            rr_length, rr_angle = leg_targets[Leg.RR]
+        else:
+            fl_length, fl_angle = leg_targets[Leg.RL]
+            fr_length, fr_angle = leg_targets[Leg.RR]
+            rl_length, rl_angle = leg_targets[Leg.FL]
+            rr_length, rr_angle = leg_targets[Leg.FR]
+            fl_angle += math.pi
+            fr_angle += math.pi
+            rl_angle -= math.pi
+            rr_angle -= math.pi
+        
+        # 分别计算IK
+        if self.flip_io_leg[0]:
+            FL_theta4, FL_theta1 = self.ik.inverse_kinematics(fl_length, fl_angle)
+            FR_theta4, FR_theta1 = self.ik.inverse_kinematics(fr_length, fr_angle)
+        else:
+            FL_theta1, FL_theta4 = self.ik.inverse_kinematics(fl_length, fl_angle)
+            FR_theta1, FR_theta4 = self.ik.inverse_kinematics(fr_length, fr_angle)
+
+        if self.flip_io_leg[1]:
+            RL_theta4, RL_theta1 = self.ik.inverse_kinematics(rl_length, rl_angle)
+            RR_theta4, RR_theta1 = self.ik.inverse_kinematics(rr_length, rr_angle)
+        else:
+            RL_theta1, RL_theta4 = self.ik.inverse_kinematics(rl_length, rl_angle)
+            RR_theta1, RR_theta4 = self.ik.inverse_kinematics(rr_length, rr_angle)
+        
+            
+        # 直接赋值给cmd数组
+        joint_cmd = np.zeros(9)
+        joint_cmd[0] = -FL_theta1 ;joint_cmd[1] = FL_theta4 + math.pi  # FL_thigh_joint_o
+        joint_cmd[2] = FR_theta1 ;joint_cmd[3] = -FR_theta4 - math.pi  # FR_thigh_joint_o
+        joint_cmd[5] = -RL_theta4 - math.pi; joint_cmd[6] = RL_theta1
+        joint_cmd[7] = RR_theta4 + math.pi; joint_cmd[8] = -RR_theta1  # RR_thigh_joint_o
+        
+        # 检查关节角度突变
+        if np.max(np.abs(joint_cmd - self.last_joint_cmd)) > (np.pi / 2):
+            self.get_logger().error("检测到关节角度突变 > 90°，进入ERROR状态！")
+            self._transition_to(StateType.ERROR)
+            return  # 不发布指令
         # 发布指令
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = JOINT_NAMES
-        # 将numpy数组转换为Python列表
-        msg.position = cmd.tolist() 
-
-
-        if np.max(np.abs(cmd - self.last_joint_cmd)) < np.pi*0.8:
-            self.joint_pub.publish(msg)
-            self.last_joint_cmd = cmd.copy()
-        else:
-            self.get_logger().info("关节角度变化过大，不发布指令")
-            self._transition_to(StateType.ERROR)
-
-        if self.current_state.is_finished():  # 状态完成
-            self.get_logger().info(f"finished, back_state: {self.back_state}, flip_io_leg: {self.flip_io_leg}")
-            self._transition_to(StateType.IDLE)
-            return
+        msg.position = joint_cmd
+        self.joint_pub.publish(msg)
+        self.last_joint_cmd = joint_cmd.copy()
 
 
 # ------------------- 主函数 -------------------
