@@ -189,7 +189,7 @@ def generate_polar_jump_trajectory(params: Params,index: int) -> List[List[Tuple
 class PolarJumpControlNode(Node):
     def __init__(self):
         super().__init__('polar_jump_control_node')
-        self.ik_solvers = LegKinematics()
+        self.ik = LegKinematics()
         self.pub = self.create_publisher(JointState, '/action', 10)
         self.params = Params()
         self.trajectory_flip1 = generate_polar_jump_trajectory(self.params,1)
@@ -201,14 +201,14 @@ class PolarJumpControlNode(Node):
 
     def publish_next_step(self):
         """ 发布轨迹的每一步 """
-        if self.step_idx >= len(self.trajectory):
+        if self.step_idx >= len(self.trajectory_flip1):
             self.get_logger().info("跳跃完成！")
             self.timer.cancel()
             return
         
-        leg_polar_coords = self.trajectory[self.step_idx]
+        leg_polar_coords = self.trajectory_flip1[self.step_idx]
         self.step_idx += 1
-        if self.step_idx == int((self.params.t_phase2+self.params.t_phase0+self.params.t_phase1) * 100):
+        if self.step_idx == int((self.params.t_phase0+self.params.t_phase1) * 100):
             self.flip_flag[1] = False if self.flip_flag[1] else True
         if self.step_idx == int((self.params.t_phase2+self.params.t_phase0+self.params.t_phase1+self.params.t_phase3) * 100):
             self.flip_flag[0] = False if self.flip_flag[0] else True
@@ -252,9 +252,11 @@ class PolarJumpControlNode(Node):
         
         # 打印当前状态
         self.get_logger().info(
-            f"Step {self.step_idx} | "
-            f"前腿: 长度={leg_polar_coords[Leg.FL][0]:.3f}m, 角度={math.degrees(leg_polar_coords[Leg.FL][1]):.1f}° | "
-            f"后腿: 长度={leg_polar_coords[Leg.RL][0]:.3f}m, 角度={math.degrees(leg_polar_coords[Leg.RL][1]):.1f}°",
+            # f"Step {self.step_idx} | "
+            # f"前腿: 长度={fl_length:.3f}m, 角度={math.degrees(fl_angle):.1f}° | "
+            # f"前腿theta1: ={math.degrees(FL_theta1):.1f}度, theta4角度={math.degrees(FL_theta4):.1f}° | "
+            # f"后腿: 长度={rl_length:.3f}m, 角度={math.degrees(rl_angle):.1f}° | "
+            f"后腿theta1: ={math.degrees(RR_theta1):.1f}度, theta4角度={math.degrees(RR_theta4):.1f}°",
             throttle_duration_sec=0.1)
 
 # ------------------- 主函数 -------------------
