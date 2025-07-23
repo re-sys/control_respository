@@ -15,7 +15,8 @@ class FiveBarLinkage:
         l4: 输入连杆2长度 (E到D)
         l5: 中间连杆长度 (C到D)
         """
-        self.l1, self.l2 = link_lengths
+        self.l1, self.l2 = 0.2,0.16
+        self.last_point = None
         
     def forward_kinematics(self, theta1, theta2):
         """
@@ -64,44 +65,51 @@ class FiveBarLinkage:
         c =  Dx**2 + Dy**2 - Bx**2 - By**2
         
         # 检查是否有解
-        if abs(a) < 1e-10 and abs(b) < 1e-10:
-            # 无解情况
-            return (Bx, By)
-        
         # 求解线性方程
-        if abs(b) > 1e-10:
+        
             # 从线性方程解出y关于x的表达式
             # y = (c - a*x) / b
             # 代入第一个约束方程
             # (x - Bx)² + ((c - a*x)/b - By)² = l3²
             
-            # 展开得到二次方程
-            A_coeff = 1 + (a/b)**2
-            B_coeff = -2*Bx - 2*a*(c - b*By)/(b**2)
-            C_coeff = Bx**2 + ((c - b*By)/b)**2 - self.l2**2
-            
-            # 求解二次方程
-            discriminant = B_coeff**2 - 4*A_coeff*C_coeff
-            
-            if discriminant < 0:
-                # 无实数解，返回中点
-                return ((Bx + Dx)/2, (By + Dy)/2)
-            
-            # 计算x的两个解
-            x1 = (-B_coeff + np.sqrt(discriminant)) / (2*A_coeff)
-            x2 = (-B_coeff - np.sqrt(discriminant)) / (2*A_coeff)
-            
-            # 计算对应的y值
-            y1 = (c - a*x1) / b
-            y2 = (c - a*x2) / b
-            
-            # 选择更合理的解（距离B更近的）
-            dist1 = np.sqrt((x1)**2 + (y1)**2)
-            dist2 = np.sqrt((x2)**2 + (y2)**2)
-            
+        # 展开得到二次方程
+        A_coeff = b**2 + (a)**2
+        B_coeff = -2*Bx*(b**2) - 2*a*(c - b*By)
+        C_coeff = (Bx**2)*b**2 + ((c - b*By))**2 - (self.l2**2)*b**2
+        
+        # 求解二次方程
+        discriminant = B_coeff**2 - 4*A_coeff*C_coeff
+        
+        if discriminant < 0:
+            # 无实数解，返回中点
+            return ((Bx + Dx)/2, (By + Dy)/2)
+        
+        # 计算x的两个解
+        x1 = (-B_coeff + np.sqrt(discriminant)) / (2*A_coeff)
+        x2 = (-B_coeff - np.sqrt(discriminant)) / (2*A_coeff)
+        
+        # 计算对应的y值
+        y1 = (c - a*x1) / b
+        y2 = (c - a*x2) / b
+        
+        # 选择更合理的解（距离B更近的）
+        point1 = np.array([x1, y1])
+        point2 = np.array([x2, y2])
+        dist1 = np.linalg.norm(point1)
+        dist2 = np.linalg.norm(point2)
+        if self.last_point is None:
             if dist1 >= dist2:
+                self.last_point = point1
                 return (x1, y1)
             else:
+                self.last_point = point2
+                return (x2, y2)
+        else:
+            if np.linalg.norm(point1-self.last_point) < np.linalg.norm(point2-self.last_point):
+                self.last_point = point1
+                return (x1, y1)
+            else:
+                self.last_point = point2
                 return (x2, y2)
         
 
