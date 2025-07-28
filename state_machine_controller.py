@@ -11,6 +11,22 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Optional
 from enum import Enum
 
+'''
+        self.leg_length = 0.14 + msg.data[0]*(0.36-0.14) 初始值0.14，范围0.14-0.36
+        self.pitch_angle = math.radians(-60)+msg.data[1]*math.radians(-60) 初始值-90°，范围-120°-60°，默认data=0.5
+        self.states[StateType.TROT].smallest_period = 0.1 + msg.data[2]*0.3 初始值0.25，范围0.1-0.4,默认data=0.5
+        self.states[StateType.TROT].stride = 0.025 + msg.data[6]*0.15 初始值0.1，范围0.025-0.175,默认data=0.5
+        self.states[StateType.TROT].z_swing = 0.01 + msg.data[7]*0.06 初始值0.04，范围0.01-0.07,默认data=0.5
+'''
+
+'''
+        if msg.data == 1:  # 空翻触发
+            self._transition_to(StateType.FLIP)
+        elif msg.data == 2:  # 前跳触发
+            self._transition_to(StateType.JUMP)
+        elif msg.data == 3:  # 恢复触发
+            self._transition_to(StateType.RECOVERY)
+'''
 # ------------------- 硬件常量定义 -------------------
 JOINT_NAMES = [
     "FL_thigh_joint_i", "FL_thigh_joint_o",  # 0,1 (左前)
@@ -22,7 +38,30 @@ JOINT_NAMES = [
 
 class Leg:
     FL = 0; FR = 1; RL = 2; RR = 3  # 四条腿枚举
+class Params:
+    def __init__(self):
+        self.leg_length = 0.20
+        self.pitch_angle = math.radians(-90)
 
+        self.swing_height = 0.04
+        self.running_stride = 0.1
+        self.max_turn_stride = 0.04
+        self.smallest_period = 0.2
+
+        self.t_phase0 = 0.6        # 下蹲阶段
+        self.t_phase1 = 0.3       # 后腿蹬伸+前腿旋转30°
+        self.t_phase2 = 0.3     # 后腿收腿+前腿旋转90°
+        self.t_phase3 = 0.2        # 前腿蹬伸+后腿旋转
+        self.t_phase4 = 0.4        # 前腿旋转
+        self.t_phase5 = 0.4        # 恢复初始状态
+
+        self.t_prepare = 0.2
+        self.t_jump = 0.15
+        self.t_short = 0.1
+        self.t_land = 0.1
+        self.t_recover = 0.6
+
+        
 class StateType(Enum):
     IDLE = "idle"           # 静止状态
     TROT = "trot"           # 对角步态
@@ -39,7 +78,8 @@ class LegKinematics:
 
     def inverse_kinematics(self, l0: float, theta: float) -> Optional[Tuple[float, float]]:
         """ 计算关节角度 (极坐标版本) """
-        theta_inside = math.acos((self.l4**2 + l0**2 - self.l3**2) / (2*self.l4*l0))
+        offset = max((l0-0.35)*60,0)
+        theta_inside = math.acos((self.l4**2 + l0**2 - self.l3**2) / (2*self.l4*l0))-offset
         return theta + theta_inside, theta - theta_inside
 
 # ------------------- 状态基类 -------------------
@@ -96,18 +136,19 @@ class IdleState(State):
 class TrotState(State):
     def __init__(self, controller: 'StateMachineController'):
         super().__init__(controller)
-        self.current_phase = 0.0
+        self.current_phase = 0.25
         # 步态参数
-        self.z_swing = 0.04
-        self.stride = 0.1
-        self.max_turn_offset = 0.04
+        self.z_swing = self.controller.params.swing_height
+        self.stride = self.controller.params.running_stride
+        self.max_turn_offset = self.controller.params.max_turn_stride
         self.phase_offsets = [0.0, 0.5, 0.5, 0.0]
         self.largest_period = 1.0
-        self.smallest_period = 0.2
+        self.smallest_period = self.controller.params.smallest_period
         self.dt = 0.01
         
     def enter(self):
         self.controller.get_logger().info("进入对角步态状态")
+        self.current_phase = 0.25
         
     def update(self) -> Dict[int, Tuple[float, float]]:
         # 更新相位
@@ -139,7 +180,7 @@ class TrotState(State):
                 
         stride *= 1 if vx >= 0 else -1
         half_stride = stride * 0.5
-        angle = -math.pi/2
+        angle = self.controller.pitch_angle
         z_base = self.controller.leg_length * math.sin(angle)
         x_base = self.controller.leg_length * math.cos(angle)
         
@@ -190,16 +231,17 @@ class FlipState(State):
         
         # 长度定义
         leg_start_length = self.controller.leg_length
-        leg_length_prepare = 0.14
+        leg_length_prepare_back = 0.14
+        leg_length_prepare_front = 0.16
         leg_length_extend = 0.36
-        leg_end_length = 0.14
+        leg_end_length = 0.16
         
         # 时间参数
         self.t_phase0 = 0.6        # 下蹲阶段
         self.t_phase1 = 0.3       # 后腿蹬伸+前腿旋转30°
-        self.t_phase2 = 0.35     # 后腿收腿+前腿旋转90°
+        self.t_phase2 = 0.37     # 后腿收腿+前腿旋转90°
         self.t_phase3 = 0.2        # 前腿蹬伸+后腿旋转
-        self.t_phase4 = 0.4        # 前腿旋转
+        self.t_phase4 = 0.2        # 前腿旋转
         self.t_phase5 = 0.4        # 恢复初始状态
 
         self.first_io_flip_index = round(self.t_phase0*100+self.t_phase1*100)
@@ -208,15 +250,16 @@ class FlipState(State):
         # 阶段0：下蹲
         for i in range(int(self.t_phase0 * 100)):
             progress = i / (self.t_phase0 * 100)
-            length = leg_start_length + (leg_length_prepare - leg_start_length) * progress
-            trajectory.append([(length, angle_phase0)] * 2)
+            length_back = leg_start_length + (leg_length_prepare_back - leg_start_length) * progress
+            length_front = leg_start_length + (leg_length_prepare_front - leg_start_length) * progress
+            trajectory.append([(length_back, angle_phase0), (length_front, angle_phase0)])
         
         # 阶段1：后腿蹬伸+前腿旋转
         for i in range(int(self.t_phase1 * 100)):
             progress = i / (self.t_phase1 * 100)
             front_angle = angle_phase0 + (angle_phase1 - angle_phase0) * progress
             trajectory.append([
-                (leg_length_prepare, front_angle),  # Front
+                (leg_length_prepare_front, front_angle),  # Front
                 (leg_length_extend, angle_phase0),  # Rear
             ])
         
@@ -227,7 +270,7 @@ class FlipState(State):
             back_angle = angle_phase0 + (angle_phase2_back - angle_phase0) * progress
             back_length = leg_length_extend + (leg_end_length - leg_length_extend) * progress
             trajectory.append([
-                (leg_length_prepare, front_angle),  # Front
+                (leg_length_prepare_front, front_angle),  # Front
                 (back_length, back_angle),       # Rear
             ])
         
@@ -244,8 +287,9 @@ class FlipState(State):
         for i in range(int(self.t_phase4 * 100)):
             progress = i / (self.t_phase4 * 100)
             front_angle = angle_phase2_front + (angle_phase4_front - angle_phase2_front) * progress
+            leg_front_length = leg_length_extend + (leg_end_length - leg_length_extend) * progress
             trajectory.append([
-                (leg_end_length, front_angle),      # Front
+                (leg_front_length, front_angle),      # Front
                 (leg_end_length, angle_phase3_back)  # Rear
             ])
         
@@ -422,11 +466,12 @@ class ErrorState(State):
 
 # ------------------- 状态机控制器 -------------------
 class StateMachineController(Node):
-    def __init__(self):
+    def __init__(self, params: Params):
         super().__init__('state_machine_controller')
         self.ik = LegKinematics()
-        self.leg_length = 0.17
-        self.pitch_angle = math.radians(-90)
+        self.params = params
+        self.leg_length = params.leg_length
+        self.pitch_angle = params.pitch_angle
         self.back_state = False
         self.flip_io_leg = [False, False] # front, rear
         self.cmd_vel = [0.0, 0.0]
@@ -446,11 +491,11 @@ class StateMachineController(Node):
         # ROS接口
         self.joint_pub = self.create_publisher(JointState, '/action', 10)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
-        self.state_sub = self.create_subscription(Int8, '/state', self.state_callback, 10)
-        self.params_sub = self.create_subscription(Float32MultiArray, '/params', self.params_callback, 10)
-        self.current_state = self.states[StateType.FLIP]
+        self.current_state = self.states[StateType.IDLE]
         self.current_state.enter()
         self.timer = self.create_timer(0.01, self.control_loop)
+        self.state_sub = self.create_subscription(Int8, '/state', self.state_callback, 10)
+        self.params_sub = self.create_subscription(Float32MultiArray, '/params', self.params_callback, 10)
 
         self.get_logger().info("状态机控制器已启动")
         
@@ -463,9 +508,9 @@ class StateMachineController(Node):
         """ 处理参数指令 """
         self.leg_length = 0.14 + msg.data[0]*(0.36-0.14)
         self.pitch_angle = math.radians(-60)+msg.data[1]*math.radians(-60)
-        self.states[StateType.TROT].smallest_period = msg.data[2]
-        self.states[StateType.TROT].stride = msg.data[3]
-        self.states[StateType.TROT].z_swing = msg.data[4]
+        self.states[StateType.TROT].smallest_period = 0.1 + msg.data[2]*0.3
+        self.states[StateType.TROT].stride = 0.025 + msg.data[6]*0.15
+        self.states[StateType.TROT].z_swing = msg.data[7]*0.06
 
     def state_callback(self, msg: Int8):
         """ 处理状态切换 """
@@ -554,7 +599,7 @@ class StateMachineController(Node):
 # ------------------- 主函数 -------------------
 def main(args=None):
     rclpy.init(args=args)
-    controller = StateMachineController()
+    controller = StateMachineController(Params())
     try:
         rclpy.spin(controller)
     except KeyboardInterrupt:
