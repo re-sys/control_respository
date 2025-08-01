@@ -3,7 +3,7 @@ import sys
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QGridLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QGridLayout, QSizePolicy
 from PyQt5.QtCore import QTimer, pyqtSignal, QThread, Qt
 from PyQt5.QtGui import QFont, QPalette, QColor, QPainter, QPen, QBrush
 import numpy as np
@@ -20,6 +20,9 @@ class FourBarLinkage:
         """
         self.l1, self.l2 = 1.6, 2
         self.last_point = None
+        self.last_By=0
+        self.need_reverse = False
+        self.last_length = 0
         
     def forward_kinematics(self, theta1, theta2):
         """
@@ -39,7 +42,9 @@ class FourBarLinkage:
         D = (self.l1 * np.cos(theta2), self.l1 * np.sin(theta2))
         
         # 计算关节C的坐标 (连杆3和连杆5的交点)
+        
         C = self._solve_joint_c(B, D)
+        
         
         return [A, B, C, D]
     
@@ -65,7 +70,8 @@ class FourBarLinkage:
         # 系数
         a = 2 * (Dx - Bx)
         b = 2 * (Dy - By)
-        c = Dx**2 + Dy**2 - Bx**2 - By**2
+        c = 0
+        
         
         # 检查是否有解
         # 求解线性方程
@@ -83,23 +89,39 @@ class FourBarLinkage:
         # 求解二次方程
         discriminant = B_coeff**2 - 4*A_coeff*C_coeff
         
-        if discriminant < 0:
-            # 无实数解，返回中点
-            return ((Bx + Dx)/2, (By + Dy)/2)
+        
         
         # 计算x的两个解
         x1 = (-B_coeff + np.sqrt(discriminant)) / (2*A_coeff)
         x2 = (-B_coeff - np.sqrt(discriminant)) / (2*A_coeff)
         
         # 计算对应的y值
+        if abs(b) < 1e-14:
+            if By * self.last_By < 0:
+                self.need_reverse = not self.need_reverse
+            theta = np.arctan2(abs(Bx),abs(By))
+            theta = theta if not self.need_reverse else np.pi-theta
+            self.last_By = By
+            alpha = np.arcsin(np.sin(theta)*16/20)
+            length = 1.6*np.cos(theta)+2*np.cos(alpha)
+            length = length if By > 0 else -length
+            length = length if length * self.last_length >= 0 else -length
+            self.last_length = length
+            self.last_point = np.array([0,length])
+            return (0,length)
+        self.last_length = 0
+        self.last_By = By
+        self.need_reverse = False
         y1 = (c - a*x1) / b
         y2 = (c - a*x2) / b
         
         # 选择更合理的解（距离B更近的）
         point1 = np.array([x1, y1])
         point2 = np.array([x2, y2])
+
         dist1 = np.linalg.norm(point1)
         dist2 = np.linalg.norm(point2)
+
         if self.last_point is None:
             if dist1 >= dist2:
                 self.last_point = point1
@@ -117,13 +139,16 @@ class FourBarLinkage:
 
 class LinkageVisualizer(QWidget):
     """四连杆机构可视化组件"""
-    def __init__(self, x_offset=0, color=QColor(255, 255, 255)):
+    def __init__(self, x_offset=0, y_offset=0, color=QColor(255, 255, 255), title="四连杆机构"):
         super().__init__()
         self.four_bar = FourBarLinkage()
         self.joint_positions = [(0, 0), (0, 0), (0, 0), (0, 0)]
-        self.x_offset = x_offset
+        self.x_offset = 0
+        self.y_offset = 0
         self.color = color
-        self.setMinimumSize(400, 400)
+        self.title = title
+        self.setMinimumSize(350, 350)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
     def update_joints(self, theta1, theta2):
         """更新关节位置"""
@@ -134,50 +159,71 @@ class LinkageVisualizer(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # 设置坐标系变换（Y轴向上为正）
-        painter.translate(self.width() / 2, self.height() / 2)
-        scale = min(self.width(), self.height()) / 400.0  # 自适应缩放
-        painter.scale(scale, -scale)
-        
-        # 绘制背景网格
-        painter.setPen(QPen(QColor(50, 50, 50), 1))
-        for i in range(-10, 11):
-            painter.drawLine(i * 20, -200, i * 20, 200)
-            painter.drawLine(-200, i * 20, 200, i * 20)
-        
-        # 绘制连杆
-        painter.setPen(QPen(self.color, 3))
-        
-        # 绘制各连杆
-        joints = self.joint_positions
-        # 绘制A-B连杆
-        if len(joints) > 1:
-            painter.drawLine(int(joints[0][0] * 100), int(joints[0][1] * 100),
-                           int(joints[1][0] * 100), int(joints[1][1] * 100))
-        # 绘制B-C连杆
-        if len(joints) > 2:
-            painter.drawLine(int(joints[1][0] * 100), int(joints[1][1] * 100),
-                           int(joints[2][0] * 100), int(joints[2][1] * 100))
-        # 绘制C-D连杆
-        if len(joints) > 3:
-            painter.drawLine(int(joints[2][0] * 100), int(joints[2][1] * 100),
-                           int(joints[3][0] * 100), int(joints[3][1] * 100))
-        # 绘制D-E连杆
-        if len(joints) >= 4:
-            painter.drawLine(int(joints[3][0] * 100), int(joints[3][1] * 100),
-                           int(joints[0][0] * 100), int(joints[0][1] * 100))
-        
-        # 绘制关节
-        painter.setBrush(QBrush(self.color))
-        for i, (x, y) in enumerate(joints):
-            painter.drawEllipse(int(x * 100 - 8), int(y * 100 - 8), 16, 16)
+        try:
+            # 获取当前窗口大小
+            width = self.width()
+            height = self.height()
             
-        # 绘制关节标签
-        painter.setPen(QPen(QColor(255, 255, 0)))
-        painter.setFont(QFont("Arial", 10))
-        labels = ['A', 'B', 'C', 'D']
-        for i, ((x, y), label) in enumerate(zip(joints, labels)):
-            painter.drawText(int(x * 100 + 15), int(y * 100 + 5), label)
+            # 设置坐标系变换（Y轴向上为正）
+            painter.translate(width / 2, height / 2)
+            scale = min(width, height) / 300.0  # 自适应缩放
+            painter.scale(scale, -scale)
+            
+            # 绘制背景网格
+            painter.setPen(QPen(QColor(50, 50, 50), 1))
+            for i in range(-8, 9):
+                painter.drawLine(i * 20, -150, i * 20, 150)
+                painter.drawLine(-150, i * 20, 150, i * 20)
+            
+            # 绘制连杆
+            painter.setPen(QPen(self.color, 3))
+            
+            # 绘制各连杆
+            joints = self.joint_positions
+            # 绘制A-B连杆
+            if len(joints) > 1:
+                painter.drawLine(int((joints[0][0] + self.x_offset) * 100), int((joints[0][1] + self.y_offset) * 100),
+                               int((joints[1][0] + self.x_offset) * 100), int((joints[1][1] + self.y_offset) * 100))
+            # 绘制B-C连杆
+            if len(joints) > 2:
+                painter.drawLine(int((joints[1][0] + self.x_offset) * 100), int((joints[1][1] + self.y_offset) * 100),
+                               int((joints[2][0] + self.x_offset) * 100), int((joints[2][1] + self.y_offset) * 100))
+            # 绘制C-D连杆
+            if len(joints) > 3:
+                painter.drawLine(int((joints[2][0] + self.x_offset) * 100), int((joints[2][1] + self.y_offset) * 100),
+                               int((joints[3][0] + self.x_offset) * 100), int((joints[3][1] + self.y_offset) * 100))
+            # 绘制D-A连杆
+            if len(joints) >= 4:
+                painter.drawLine(int((joints[3][0] + self.x_offset) * 100), int((joints[3][1] + self.y_offset) * 100),
+                               int((joints[0][0] + self.x_offset) * 100), int((joints[0][1] + self.y_offset) * 100))
+            
+            # 绘制关节
+            painter.setBrush(QBrush(self.color))
+            for i, (x, y) in enumerate(joints):
+                painter.drawEllipse(int((x + self.x_offset) * 100 - 6), int((y + self.y_offset) * 100 - 6), 12, 12)
+                
+            # 绘制关节标签 - 修复字体翻转问题
+            painter.setPen(QPen(QColor(255, 255, 0)))
+            painter.setFont(QFont("Arial", 8))
+            labels = ['A', 'B', 'C', 'D']
+            for i, ((x, y), label) in enumerate(zip(joints, labels)):
+                # 使用世界坐标绘制文本，避免翻转
+                world_x = (x + self.x_offset) * 100
+                world_y = (y + self.y_offset) * 100
+                # 转换回屏幕坐标
+                screen_x = int(world_x * scale + width / 2)
+                screen_y = int(-world_y * scale + height / 2)
+                painter.drawText(screen_x + 10, screen_y + 3, label)
+                
+            # 绘制标题 - 修复字体翻转问题
+            painter.setPen(QPen(self.color))
+            painter.setFont(QFont("Arial", 10))
+            # 使用屏幕坐标绘制标题
+            title_x = int(-50 * scale + width / 2)
+            title_y = int(130 * scale + height / 2)
+            painter.drawText(title_x, title_y, self.title)
+        finally:
+            painter.end()
 
 class JointDataThread(QThread):
     """ROS数据接收线程"""
@@ -186,7 +232,7 @@ class JointDataThread(QThread):
     
     def __init__(self):
         super().__init__()
-        self.joint_data = [0.0, 0.0, 0.0, 0.0]
+        self.joint_data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         
     def run(self):
         try:
@@ -220,13 +266,31 @@ class JointDataThread(QThread):
             
     def joint_callback(self, msg):
         try:
-            if len(msg.position) >= 4:
-                # 获取前四个关节角度数据（本来就是弧度值）
-                self.joint_data = list(msg.position[:8])
+            if len(msg.position) >= 9:
+                # 获取所有关节角度数据（本来就是弧度值）
+                self.joint_data = list(msg.position[:9])
+                
+                # 根据state_machine_controller中的逆变换逻辑进行逆变换
+                # 从joint_cmd恢复出各腿的角度
+                FL_theta1 = -self.joint_data[0]  # 左前大腿内关节
+                FL_theta4 = self.joint_data[1] - math.pi  # 左前大腿外关节
+                
+                FR_theta1 = self.joint_data[2]  # 右前大腿内关节
+                FR_theta4 = -self.joint_data[3] - math.pi  # 右前大腿外关节
+                
+                RL_theta4 = -self.joint_data[5] - math.pi  # 左后大腿内关节
+                RL_theta1 = self.joint_data[6]  # 左后大腿外关节
+                
+                RR_theta4 = self.joint_data[7] + math.pi  # 右后大腿内关节
+                RR_theta1 = -self.joint_data[8]  # 右后大腿外关节
+                
                 # 转换为角度用于显示
-                self.joint_data_degrees = [math.degrees(angle) for angle in self.joint_data]
-                # 同时发送弧度值用于四连杆计算
+                theta_list = [FL_theta1, FL_theta4, FR_theta1, FR_theta4, RL_theta1, RL_theta4, RR_theta1, RR_theta4]
+                self.joint_data_degrees = [math.degrees(angle) for angle in theta_list]
+                
+                # 发送角度值用于显示
                 self.data_received.emit(self.joint_data_degrees)
+                # 发送完整的9个弧度值用于四连杆计算
                 self.radians_received.emit(self.joint_data)
         except Exception as e:
             print(f"数据处理错误: {e}")
@@ -239,7 +303,7 @@ class JointVisualizer(QMainWindow):
         
     def initUI(self):
         self.setWindowTitle('四足机器人关节角度可视化')
-        self.setGeometry(100, 100, 1400, 800)
+        self.setGeometry(100, 100, 1800, 1200)
         
         # 设置深色主题
         self.setStyleSheet("""
@@ -289,7 +353,7 @@ class JointVisualizer(QMainWindow):
         
         # 创建角度显示标签
         self.angle_labels = []
-        angle_names = ['左前内', '左前外', '右前内', '右前外']
+        angle_names = ['左前内', '左前外', '右前内', '右前外', '左后内', '左后外', '右后内', '右后外']
         
         for i, name in enumerate(angle_names):
             angle_container = QVBoxLayout()
@@ -312,40 +376,49 @@ class JointVisualizer(QMainWindow):
         
         main_layout.addLayout(angle_display_layout)
         
-        # 创建水平布局来放置两个四连杆可视化
-        horizontal_layout = QHBoxLayout()
+        # 创建2x2网格布局来放置四个四连杆可视化
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(20)  # 设置网格间距
         
-        # 左侧：左腿四连杆可视化
-        left_layout = QVBoxLayout()
+        # 左前腿四连杆可视化 - 调整偏移量，让上面的腿往下移动
+        self.fl_linkage_visualizer = LinkageVisualizer(
+            x_offset=-1.5, y_offset=0.5, 
+            color=QColor(0, 255, 0), 
+            title="左前腿"
+        )
+        grid_layout.addWidget(self.fl_linkage_visualizer, 0, 0)
         
-        # 左腿标题
-        left_title = QLabel('左腿四连杆机构')
-        left_title.setObjectName("title")
-        left_title.setAlignment(Qt.AlignCenter)
-        left_layout.addWidget(left_title)
+        # 右前腿四连杆可视化 - 调整偏移量，让上面的腿往下移动
+        self.fr_linkage_visualizer = LinkageVisualizer(
+            x_offset=1.5, y_offset=0.5, 
+            color=QColor(255, 0, 0), 
+            title="右前腿"
+        )
+        grid_layout.addWidget(self.fr_linkage_visualizer, 0, 1)
         
-        # 左腿可视化组件
-        self.left_linkage_visualizer = LinkageVisualizer(x_offset=-1.5, color=QColor(0, 255, 0))
-        left_layout.addWidget(self.left_linkage_visualizer)
+        # 左后腿四连杆可视化 - 调整偏移量，让下面的腿往上移动
+        self.rl_linkage_visualizer = LinkageVisualizer(
+            x_offset=-1.5, y_offset=-0.5, 
+            color=QColor(0, 0, 255), 
+            title="左后腿"
+        )
+        grid_layout.addWidget(self.rl_linkage_visualizer, 1, 0)
         
-        # 右侧：右腿四连杆可视化
-        right_layout = QVBoxLayout()
+        # 右后腿四连杆可视化 - 调整偏移量，让下面的腿往上移动
+        self.rr_linkage_visualizer = LinkageVisualizer(
+            x_offset=1.5, y_offset=-0.5, 
+            color=QColor(255, 255, 0), 
+            title="右后腿"
+        )
+        grid_layout.addWidget(self.rr_linkage_visualizer, 1, 1)
         
-        # 右腿标题
-        right_title = QLabel('右腿四连杆机构')
-        right_title.setObjectName("title")
-        right_title.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(right_title)
+        # 设置网格的行列拉伸比例
+        grid_layout.setRowStretch(0, 1)
+        grid_layout.setRowStretch(1, 1)
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
         
-        # 右腿可视化组件
-        self.right_linkage_visualizer = LinkageVisualizer(x_offset=1.5, color=QColor(0, 0, 255))
-        right_layout.addWidget(self.right_linkage_visualizer)
-        
-        # 将左右布局添加到水平布局
-        horizontal_layout.addLayout(left_layout)
-        horizontal_layout.addLayout(right_layout)
-        
-        main_layout.addLayout(horizontal_layout)
+        main_layout.addLayout(grid_layout)
         
         # 添加一些间距
         main_layout.addStretch()
@@ -376,28 +449,29 @@ class JointVisualizer(QMainWindow):
     def updateLinkageData(self, joint_data_radians):
         """更新四连杆可视化（弧度值）"""
         # 根据state_machine_controller中的逆变换逻辑
-        # joint_cmd[0] = -FL_theta1 (左前大腿内关节)
-        # joint_cmd[1] = FL_theta4 + π (左前大腿外关节)
-        # joint_cmd[2] = FR_theta1 (右前大腿内关节)
-        # joint_cmd[3] = -FR_theta4 - π (右前大腿外关节)
-        
-        if len(joint_data_radians) >= 4:
-            # 左腿：需要反向变换
-            theta1 = -joint_data_radians[0]  # 左前大腿内关节
-            theta2 = joint_data_radians[1] - math.pi  # 左前大腿外关节
+        # 从joint_cmd恢复出各腿的角度
+        if len(joint_data_radians) >= 9:
+            # 左前腿
+            FL_theta1 = -joint_data_radians[0]  # 左前大腿内关节
+            FL_theta4 = joint_data_radians[1] - math.pi  # 左前大腿外关节
             
-            # 右腿：需要反向变换
-            # theta3 = joint_data_radians[2]  # 右前大腿内关节
-            # theta4 = -joint_data_radians[3] - math.pi  # 右前大腿外关节
-# 右腿：需要反向变换
-            theta3 = -joint_data_radians[5]-math.pi  # 右前大腿内关节
-            theta4 = joint_data_radians[6]  # 右前大腿外关节
+            # 右前腿
+            FR_theta1 = joint_data_radians[2]  # 右前大腿内关节
+            FR_theta4 = -joint_data_radians[3] - math.pi  # 右前大腿外关节
             
-            # 更新左腿四连杆可视化
-            self.left_linkage_visualizer.update_joints(theta1, theta2)
+            # 左后腿
+            RL_theta4 = -joint_data_radians[5] - math.pi  # 左后大腿内关节
+            RL_theta1 = joint_data_radians[6]  # 左后大腿外关节
             
-            # 更新右腿四连杆可视化
-            self.right_linkage_visualizer.update_joints(theta3, theta4)
+            # 右后腿
+            RR_theta4 = joint_data_radians[7] + math.pi  # 右后大腿内关节
+            RR_theta1 = -joint_data_radians[8]  # 右后大腿外关节
+            
+            # 更新各腿四连杆可视化
+            self.fl_linkage_visualizer.update_joints(FL_theta1, FL_theta4)
+            self.fr_linkage_visualizer.update_joints(FR_theta1, FR_theta4)
+            self.rl_linkage_visualizer.update_joints(RL_theta1, RL_theta4)
+            self.rr_linkage_visualizer.update_joints(RR_theta1, RR_theta4)
         
     def closeEvent(self, event):
         """关闭事件处理"""
