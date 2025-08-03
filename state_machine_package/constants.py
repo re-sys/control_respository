@@ -36,3 +36,4 @@ class StateType(Enum):
     JUMP = "jump"           # 前跳状态
     ERROR = "error"         # 错误状态
     RECOVERY = "recovery"   # 恢复状态 
+    NAVIGATION = "navigation"

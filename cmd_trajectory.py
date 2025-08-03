@@ -24,20 +24,20 @@ class GaitParams:
     def __init__(self):
         # 基础参数 (单位: 米/秒)
 
-        self.z_swing = 0.03       # 抬腿高度
+        self.z_swing = 0.03   # 抬腿高度
         self.leg_length_min = 0.14
         self.leg_length_max = 0.34
         self.z_landing_offset = 0.00
         
-        self.stride = 0.1     # 最大步幅
-        self.max_turn_offset = 0.04 # 最大转向偏移量
+        self.stride = 0.18     # 最大步幅
+        self.max_turn_offset = 0.20 # 最大转向偏移量
         self.max_angle = math.pi/6 # 最大角度
         # 对角步态相位 (FL/RR同相, FR/RL同相)
         self.phase_offsets = [0.0, 0.5, 0.5, 0.0]
         
         # 时间参数
-        self.largest_period = 1.0         # 完整步态周期(秒)
-        self.smallest_period = 0.2         # 完整步态周期(秒)
+        self.largest_period = 0.8        # 完整步态周期(秒)
+        self.smallest_period = 0.30         # 完整步态周期(秒)
         self.dt = 0.01            # 控制周期(10ms)
         
 

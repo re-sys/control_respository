@@ -7,8 +7,8 @@ import time
 from typing import List, Tuple, Optional
 
 # ------------------- 硬件常量定义 -------------------
-UPPER_LINK_LENGTH = 0.2  # l3, 大腿连杆长度 (m)，与 forwardFlip.py 保持一致
-LOWER_LINK_LENGTH = 0.16  # l4, 小腿连杆长度 (m)，与 forwardFlip.py 保持一致
+UPPER_LINK_LENGTH = 0.2  # l3, 小腿连杆长度 (m)，与 forwardFlip.py 保持一致
+LOWER_LINK_LENGTH = 0.16  # l4, 大腿连杆长度 (m)，与 forwardFlip.py 保持一致
 
 JOINT_NAMES = [
     "FL_thigh_joint_i", "FL_thigh_joint_o",  # 0, 1
@@ -26,11 +26,11 @@ class Leg:
 
 # ------------------- 逆运动学核心 (极坐标接口，笛卡尔核心) -------------------
 class Params:
-    def __init__(self):
+    def __init__(self): 
         self.t_phase0 = 0.6        # 下蹲阶段
         self.t_phase1 = 0.35       # 后腿蹬伸+前腿旋转30°
-        self.t_phase2 = 0.35     # 后腿收腿+前腿旋转90°
-        self.t_phase3 = 0.2        # 前腿蹬伸+后腿旋转
+        self.t_phase2 = 0.3     # 后腿收腿+前腿旋转90°
+        self.t_phase3 = 0.25        # 前腿蹬伸+后腿旋转
         self.t_phase4 = 0.4        # 前腿旋转
 class LegKinematics:
     def __init__(self, l3: float = UPPER_LINK_LENGTH, l4: float = LOWER_LINK_LENGTH):
@@ -60,20 +60,20 @@ def generate_polar_jump_trajectory(params: Params,index: int) -> List[List[Tuple
     if index ==1:
         angle_phase0 = math.radians(-90)   # 初始角度
         angle_phase1 = math.radians(-70)   # 第一阶段前腿旋转目标
-        angle_phase2_front = math.radians(10)  # 第二阶段前腿旋转目标
+        angle_phase2_front = math.radians(0)  # 第二阶段前腿旋转目标
         angle_phase3_back = math.radians(-270) # 第三阶段后腿旋转目标
         angle_phase4_front = math.radians(90)  # 第四阶段前腿旋转目标
     elif index==2:
         angle_phase0 = math.radians(-90+180)   # 初始角度
         angle_phase1 = math.radians(-70+180)   # 第一阶段前腿旋转目标
-        angle_phase2_front = math.radians(10+180)  # 第二阶段前腿旋转目标
+        angle_phase2_front = math.radians(0+180)  # 第二阶段前腿旋转目标
         angle_phase3_back = math.radians(-270+180) # 第三阶段后腿旋转目标
         angle_phase4_front = math.radians(90+180)  # 第四阶段前腿旋转目标
     
     # 长度定义（米）
     leg_start_length = 0.17
     leg_length_prepare = 0.12
-    leg_length_extend = 0.36
+    leg_length_extend = 0.35
     leg_end_length = 0.13
     
     # 时间参数（秒）
@@ -239,7 +239,7 @@ class PolarJumpControlNode(Node):
         joint_cmd = [0.0] * 9
         joint_cmd[0] = -FL_theta1 ;joint_cmd[1] = FL_theta4 + math.pi  # FL_thigh_joint_o
         joint_cmd[2] = FR_theta1 ;joint_cmd[3] = -FR_theta4 - math.pi  # FR_thigh_joint_o
-        joint_cmd[5] = -RL_theta4 - math.pi  ;joint_cmd[6] = RL_theta1 ;
+        joint_cmd[5] = -RL_theta4 - math.pi  ;joint_cmd[6] = RL_theta1  # RL_thigh_joint_o
         joint_cmd[7] = RR_theta4 + math.pi  ;joint_cmd[8] = -RR_theta1  # RR_thigh_joint_o
         
         

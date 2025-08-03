@@ -7,7 +7,6 @@ import math
 from typing import Dict, Tuple
 from base_state import State
 from constants import StateType, Leg
-
 class WalkState(State):
     def __init__(self, controller: 'StateMachineController'):
         super().__init__(controller)

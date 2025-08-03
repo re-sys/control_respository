@@ -6,6 +6,7 @@
 
 import rclpy
 from rclpy.node import Node
+from tf_transformations import euler_from_quaternion
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Twist, Quaternion
 from std_msgs.msg import Float32, Bool, Int8
@@ -21,6 +22,7 @@ from states import (
     IdleState, WalkState, FlipState, JumpState, 
     RecoveryState, ErrorState
 )
+from states.navigation import Navigation_straight_line
 
 class StateMachineController(Node):
     def __init__(self, params: Params):
@@ -37,6 +39,7 @@ class StateMachineController(Node):
         self.joint_velocity = np.zeros(9)
         self.joint_effort = np.zeros(9)
         self.error_time = 0
+        self.pitch, self.roll, self.yaw = 0, 0, 0
         self.last_vel_not_change_count=0
         self.last_first_joint_velocity = 0.0
         self.kp_value = 35.0
@@ -49,7 +52,8 @@ class StateMachineController(Node):
             StateType.FLIP: FlipState(self),
             StateType.JUMP: JumpState(self),
             StateType.ERROR: ErrorState(self),
-            StateType.RECOVERY: RecoveryState(self)
+            StateType.RECOVERY: RecoveryState(self),
+            StateType.NAVIGATION: Navigation_straight_line(self)
         }
         
         # ROS接口
@@ -60,7 +64,8 @@ class StateMachineController(Node):
         self.state_sub = self.create_subscription(Int8, '/state', self.state_callback, 10)
         self.joint_state_sub = self.create_subscription(JointState, '/joint_state', self.joint_state_callback, 10)
         self.params_sub = self.create_subscription(Float32MultiArray, '/params', self.params_callback, 10)
-        
+        self.orient = self.create_subscription(Quaternion, 'orient', self.orient_callback, 10)
+
         self.current_state = self.states[StateType.IDLE]
         self.current_state.enter()
         self.publish_kp_value(self.kp_value)
@@ -69,6 +74,12 @@ class StateMachineController(Node):
         self.timer = self.create_timer(0.01, self.control_loop)
         self.get_logger().info("状态机控制器已启动")
     
+    def orient_callback(self, msg):
+        self.pitch = euler_from_quaternion([msg.x, msg.y, msg.z, msg.w])[0]
+        self.roll = euler_from_quaternion([msg.x, msg.y, msg.z, msg.w])[1]
+        self.yaw = euler_from_quaternion([msg.x, msg.y, msg.z, msg.w])[2]
+        # self.get_logger().info(f"pitch:{self.pitch},roll:{self.roll},yaw:{self.yaw}")
+
     def cmd_vel_callback(self, msg: Twist):
         """ 处理速度指令 """
         # 更新当前状态的速度指令
@@ -80,17 +91,19 @@ class StateMachineController(Node):
         self.pitch_angle = math.radians(-60)+msg.data[1]*math.radians(-60)
         self.states[StateType.WALK].smallest_period = 0.4 - msg.data[2]*0.3
         self.states[StateType.WALK].stride = 0.1 + msg.data[3]*0.1
-        self.states[StateType.WALK].z_swing = msg.data[4]*0.06
+        self.states[StateType.WALK].z_swing = 0.05 + msg.data[4]*0.09
 
     def state_callback(self, msg: Int8):
         """ 处理状态切换 """
         # 检查是否需要切换到跳跃状态
         if msg.data == 1:  # 空翻触发
-            self._transition_to(StateType.FLIP)
+            self._transition_to(StateType.NAVIGATION)
         elif msg.data == 2:  # 前跳触发
             self._transition_to(StateType.JUMP)
         elif msg.data == 3:  # 恢复触发
             self._transition_to(StateType.RECOVERY)
+        elif msg.data == 4:  # 导航触发
+            self._transition_to(StateType.NAVIGATION)
 
     def joint_state_callback(self, msg: JointState):
         """ 处理关节状态 """
@@ -195,7 +208,7 @@ class StateMachineController(Node):
 
         if self.cmd_vel[0] != 0 or self.cmd_vel[1] != 0:
             self._transition_to(StateType.WALK)
-
+        
         cmd = self.current_state.update()
         # 直接获取四个腿的数据
         # 发布指令
