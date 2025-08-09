@@ -34,6 +34,7 @@ class StateType(Enum):
     WALK = "walk"           # 对角步态
     FLIP = "flip"           # 空翻状态
     JUMP = "jump"           # 前跳状态
+    STAIR_JUMP = "stair_jump"  # 台阶跳跃状态
     ERROR = "error"         # 错误状态
     RECOVERY = "recovery"   # 恢复状态 
     NAVIGATION = "navigation"

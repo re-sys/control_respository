@@ -19,7 +19,7 @@ class Navigation_straight_line(State):
         self.phase_trot_offsets = [0.0, 0.5, 0.5, 0.0]
         self.phase_walk_offsets = [0.0, 0.25, 0.5, 0.75]
         self.phase_offsets = self.phase_trot_offsets
-        self.largest_period = 0.4
+        self.largest_period = 0.5
         self.smallest_period = self.controller.params.smallest_period
         self.dt = 0.01
         self.swing_time = 0.5
@@ -30,9 +30,9 @@ class Navigation_straight_line(State):
         self.stride: {self.stride}
         """)
         # PID控制器参数 - 用于保持直线运动
-        self.k_p = 1.0  # 比例增益
-        self.k_i = 0.05 # 积分增益  
-        self.k_d = 0.005  # 微分增益
+        self.k_p = 2.5 # 比例增益
+        self.k_i = 0.01 # 积分增益  
+        self.k_d = 0.05  # 微分增益
         
         # PID控制器状态变量
         self.yaw_error_integral = 0.0
@@ -44,8 +44,8 @@ class Navigation_straight_line(State):
         
     def enter(self):
         self.z_swing = 0.05
-        self.stride = 0.15
-        self.max_turn_offset = 0.1
+        self.stride = 0.1
+        self.max_turn_offset = 0.03
         self.controller.get_logger().info(f"""
         self.z_swing: {self.z_swing}
         self.stride: {self.stride}
@@ -71,7 +71,7 @@ class Navigation_straight_line(State):
                             self.k_i * self.yaw_error_integral + 
                             self.k_d * yaw_error_derivative)
         # 限制积分项防止积分饱和
-        self.yaw_error_integral = max(min(self.yaw_error_integral, 1.0), -1.0)
+        self.yaw_error_integral = max(min(self.yaw_error_integral, 0.8), -0.8)
         #需要將兩個速度正規化到[-1,1]之間
         self.vx = max(min(self.forward_speed, 1), -1)
         self.vy = max(min(angular_correction, 1), -1)

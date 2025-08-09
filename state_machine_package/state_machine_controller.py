@@ -19,7 +19,7 @@ import time
 from constants import JOINT_NAMES, Leg, Params, StateType
 from kinematics import LegKinematics
 from states import (
-    IdleState, WalkState, FlipState, JumpState, 
+    IdleState, WalkState, FlipState, JumpState, StairJumpState,
     RecoveryState, ErrorState
 )
 from states.navigation import Navigation_straight_line
@@ -51,6 +51,7 @@ class StateMachineController(Node):
             StateType.WALK: WalkState(self),
             StateType.FLIP: FlipState(self),
             StateType.JUMP: JumpState(self),
+            StateType.STAIR_JUMP: StairJumpState(self),
             StateType.ERROR: ErrorState(self),
             StateType.RECOVERY: RecoveryState(self),
             StateType.NAVIGATION: Navigation_straight_line(self)
@@ -91,15 +92,17 @@ class StateMachineController(Node):
         self.pitch_angle = math.radians(-60)+msg.data[1]*math.radians(-60)
         self.states[StateType.WALK].smallest_period = 0.4 - msg.data[2]*0.3
         self.states[StateType.WALK].stride = 0.1 + msg.data[3]*0.1
-        self.states[StateType.WALK].z_swing = 0.05 + msg.data[4]*0.09
-
+        self.states[StateType.WALK].z_swing = 0.02 + msg.data[4]*0.09
+       
     def state_callback(self, msg: Int8):
         """ 处理状态切换 """
         # 检查是否需要切换到跳跃状态
         if msg.data == 1:  # 空翻触发
-            self._transition_to(StateType.NAVIGATION)
+            self._transition_to(StateType.FLIP)
         elif msg.data == 2:  # 前跳触发
             self._transition_to(StateType.JUMP)
+        elif msg.data == 5:  # 台阶跳跃触发
+            self._transition_to(StateType.STAIR_JUMP)
         elif msg.data == 3:  # 恢复触发
             self._transition_to(StateType.RECOVERY)
         elif msg.data == 4:  # 导航触发
